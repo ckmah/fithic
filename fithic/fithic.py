@@ -44,9 +44,18 @@ def parse_args(args):
                       help="REQUIRED: interactions between fragment pairs are \
                       read from INTERSFILE", required=True)
 
+    parser.add_argument("-i2", "--interactions2", dest="intersfile2",\
+                      help="REQUIRED: interactions between fragment pairs are \
+                      read from INTERSFILE2", required=True)
+
     parser.add_argument("-f", "--fragments", dest="fragsfile", \
                       help="REQUIRED: midpoints (or start indices) \
                       of the fragments are read from FRAGSFILE",\
+                      required=True)
+
+    parser.add_argument("-f2", "--fragments2", dest="fragsfile2", \
+                      help="REQUIRED: midpoints (or start indices) \
+                      of the fragments are read from FRAGSFILE2",\
                       required=True)
 
     parser.add_argument("-o", "--outdir", dest="outdir", \
@@ -62,6 +71,11 @@ def parse_args(args):
     parser.add_argument("-t", "--biases", dest="biasfile",\
                         help="RECOMMENDED: biases calculated by\
                         ICE or KR norm for each locus are read from BIASFILE",\
+                        required=False)
+
+    parser.add_argument("-t2", "--biases2", dest="biasfile2",\
+                        help="RECOMMENDED: biases calculated by\
+                        ICE or KR norm for each locus are read from BIASFILE2",\
                         required=False)
 
     parser.add_argument("-p", "--passes", dest="noOfPasses",type=int,\
@@ -140,6 +154,19 @@ def main():
         print("Fragments file is not gzipped. Exiting now...")
         sys.exit(2)
 
+    fragsFile2 = args.fragsfile2
+    if os.path.exists(fragsFile2):
+        print("Reading fragments file from: %s" % fragsFile2)
+    else:
+        print("Fragment 2 file not found")
+        sys.exit(2)
+    try:
+        fragsF2 = gzip.open(fragsFile2, 'r')
+        fragsF2.readline()
+    except:
+        print("Fragments 2 file is not gzipped. Exiting now...")
+        sys.exit(2)
+
     contactCountsFile = args.intersfile
     if os.path.isfile(contactCountsFile):
         print("Reading interactions file from: %s" % contactCountsFile)
@@ -151,6 +178,19 @@ def main():
         contactCountsF.readline()
     except:
         print("Interactions file is not gzipped. Exiting now...")
+
+    # CUSTOM SECONDARY INTERACTION COUNT INPUT
+    contactCountsFile2 = args.intersfile2
+    if os.path.isfile(contactCountsFile2):
+        print("Reading interactions file 2 from: %s" % contactCountsFile2)
+    else:
+        print("Interaction file 2 not found")
+        sys.exit(2)
+    try:
+        contactCountsF2 = gzip.open(contactCountsFile2, 'r')
+        contactCountsF2.readline()
+    except:
+        print("Interactions file 2 is not gzipped. Exiting now...")
 
     outputPath = args.outdir
     if not os.path.isdir(outputPath):
@@ -182,6 +222,17 @@ def main():
     else:
         print("No bias file")
     biasFile = args.biasfile 
+    
+    # CUSTOM SECONDARY BIAS FILE INPUT
+    if args.biasfile2 is not None:
+        if os.path.isfile(args.biasfile2):
+            print("Reading bias 2 file from: %s" % args.biasfile2)
+        else:
+            print("Bias file 2 not found")
+            sys.exit(2)
+    else:
+        print("No bias 2 file")
+    biasFile2 = args.biasfile2
     
 
     noOfPasses = 1
@@ -323,7 +374,26 @@ def main():
     outliersline = SortedList()
     outliersdist = SortedList()
     #fit a smooth spline to the bin values, and compute and write p values/q values
-    splineXinit,splineYinit,residual,outliersline, outliersdist, FDRXinit, FDRYinit= fit_Spline(mainDic,x,y,yerr,contactCountsFile,os.path.join(outputPath,libName+".spline_pass1"),biasDic, outliersline, outliersdist, observedIntraInRangeSum, possibleIntraInRangeCount, possibleInterAllCount, observedIntraAllSum, observedInterAllSum, resolution, 1)
+    
+    # READ SECOND SET OF INTERACTION FILES
+    mainDic2={} # given a distance this dictionary will return [Npairs,TotalContactCount] for only those interactions present in the interactions file
+    (mainDic2,observedInterAllSum2,observedIntraAllSum2,observedIntraInRangeSum2) = read_Interactions(contactCountsFile2, biasFile2)
+    binStats2 = makeBinsFromInteractions(mainDic2, noOfBins, observedIntraInRangeSum2)
+    (binStats2, noOfFrags2, maxPossibleGenomicDist2, possibleIntraInRangeCount2, possibleInterAllCount2, interChrProb2, baselineIntraChrProb2) = generate_FragPairs(binStats2, fragsFile2, resolution)
+
+    #read and parse bias values for each locus from ICE or KR normalization output
+    if biasFile2:
+        biasDic2 = read_biases(biasFile2)
+    else:
+        biasDic2 = 0
+
+    y = y * (observedIntraInRangeSum / observedIntraInRangeSum2)
+    splineXinit, splineYinit, residual, outliersline, outliersdist, FDRXinit, FDRYinit = fit_Spline(mainDic, x, y, yerr,
+                                                                                                    contactCountsFile2, os.path.join(outputPath,libName+".spline_pass1"), biasDic2,
+                                                                                                    outliersline, outliersdist,
+                                                                                                    observedIntraInRangeSum2, possibleIntraInRangeCount2, possibleInterAllCount2, observedIntraAllSum2, observedInterAllSum2,
+                                                                                                    resolution, 1)
+    # BACKUP ORIGINAL splineXinit,splineYinit,residual,outliersline, outliersdist, FDRXinit, FDRYinit= fit_Spline(mainDic,x,y,yerr,contactCountsFile,os.path.join(outputPath,libName+".spline_pass1"),biasDic, outliersline, outliersdist, observedIntraInRangeSum, possibleIntraInRangeCount, possibleInterAllCount, observedIntraAllSum, observedInterAllSum, resolution, 1)
     print("Number of outliers is... %s" % len(outliersline))
     splinefit1en = time.time()
     print("Spline fit Pass 1 completed. Time took %s" % (splinefit1en-splinefit1st))
@@ -709,80 +779,77 @@ def read_biases(infilename):
     print("Bias file read. Time took %s" % (endt-startt))
     return biasDic # from read_biases
 
-def calculateProbabilities(mainDic,binStats,resolution,outfilename,observedIntraInRangeSum):
+def calculateProbabilities(mainDic, binStats, resolution, outfilename, observedIntraInRangeSum):
     with open(logfile, 'a') as log:
-        log.write("\nCalculating probability means and standard deviations of contact counts\n"),
-        log.write("------------------------------------------------------------------------------------\n"),
+        log.write(
+            "\nCalculating probability means and standard deviations of contact counts\n"),
+        log.write(
+            "------------------------------------------------------------------------------------\n"),
 
     if resolution:
-        nameoffile = (outfilename+'.res'+str(resolution)+'.txt')
+        nameoffile = (outfilename + '.res' + str(resolution) + '.txt')
     else:
-        nameoffile = (outfilename+'.txt')
+        nameoffile = (outfilename + '.txt')
 
-    outfile=open(nameoffile, 'w')
+    outfile = open(nameoffile, 'w')
     x = []
     y = []
     yerr = []
-    pairCounts=[]
-    interactionTotals=[]
-        ##binStats
-        #0: range of distances in this bin
-        #1: no. of possible pairs w/in this range of distances
-        #2: sumoverallContactCounts
-        #3: Sumoveralldistances in this bin in distScaling vals
-        #4: avg CC
-        #5: avg distance
-        #6: bins
-        #7: no. of possible pairs w/ proper dist
+    pairCounts = []
+    interactionTotals = []
+    # binStats (list of bins with following attributes)
+    # 0: range of distances in this bin
+    # 1: no. of possible pairs w/in this range of distances
+    # 2: sumoverallContactCounts
+    # 3: Sumoveralldistances in this bin in distScaling vals
+    # 4: avg CC
+    # 5: avg distance
+    # 6: bins
+    # 7: no. of possible pairs w/ proper dist
 
     for i in range(len(binStats)):
         currBin = binStats[i]
         sumCC = currBin[2]
         sumDistB4Scaling = currBin[3]
         possPairsInRange = currBin[1]
-        try:
-            avgCC = (1.0*sumCC/possPairsInRange)/observedIntraInRangeSum
+        try:  # e.g. 1.0 * 100/ 10000 / 
+            avgCC = (1.0 * sumCC / possPairsInRange) / observedIntraInRangeSum
         except:
-            print("WARNING - Zero avg. contact in bin. Ensure interaction file is correct.")
+            print(
+                "WARNING - Zero avg. contact in bin. Ensure interaction file is correct.")
             avgCC = 0
         try:
-            avgDist = distScaling*(sumDistB4Scaling/currBin[7])
+            avgDist = distScaling * (sumDistB4Scaling / currBin[7])
         except:
-            print("WARNING - Zero avg. distance in bin. Ensure interaction file is correct.")
+            print(
+                "WARNING - Zero avg. distance in bin. Ensure interaction file is correct.")
             avgDist = 0
-        currBin[4]=avgCC
-        currBin[5]=avgDist
+        currBin[4] = avgCC
+        currBin[5] = avgDist
         y.append(avgCC)
         x.append(avgDist)
-        """
-        meanCountPerPair = 0
-        M2 = 0
-        for dists in currBin[6]: #by definition not including the nonzero dists in this bin in this calc.
-            delta = mainDic[dists][1]-meanCountPerPair
-            meanCountPerPair += (delta*1.0)/possPairsInRange
-            M2 += delta*(mainDic[dists][1]-meanCountPerPair)
-        var = M2/(possPairsInRange-1)
-        sd = math.sqrt(var)
-        se = sd/math.sqrt(possPairsInRange)
-        se_p = se/observedIntraInRangeSum
-        #yerr.append(se_p)
-        """
         yerr.append(0)
         pairCounts.append(possPairsInRange)
         interactionTotals.append(sumCC)
 
     print("Writing %s" % nameoffile)
-    outfile.write("avgGenomicDist\tcontactProbability\tstandardError\tnoOfLocusPairs\ttotalOfContactCounts\n")
+    outfile.write(
+        "avgGenomicDist\tcontactProbability\tstandardError\tnoOfLocusPairs\ttotalOfContactCounts\n")
     for i in range(len(x)):
-        outfile.write("%d" % x[i] + "\t"+"%.2e" % y[i]+ "\t" + "%.2e" % yerr[i] + "\t" +"%d" % pairCounts[i] + "\t" +"%d" % interactionTotals[i]+"\n")
+        outfile.write("%d" % x[i] + "\t" + "%.2e" % y[i] + "\t" + "%.2e" % yerr[i] +
+                      "\t" + "%d" % pairCounts[i] + "\t" + "%d" % interactionTotals[i] + "\n")
     outfile.close()
     with open(logfile, 'a') as log:
         log.write("Means and error written to %s\n" % (nameoffile)),
         log.write("\n"),
-    return [x,y,yerr] # from calculateProbabilities
+
+    return [x, y, yerr]  # from calculateProbabilities
 
 
 def fit_Spline(mainDic,x,y,yerr,infilename,outfilename,biasDic,outliersline,outliersdist,observedIntraInRangeSum, possibleIntraInRangeCount, possibleInterAllCount, observedIntraAllSum, observedInterAllSum, resolution, passNo):
+    '''
+    infilename = name of interactionCounts file
+    '''
     with open(logfile, 'a') as log:
         log.write("\nFitting a univariate spline to the probability means\n"),
         log.write("------------------------------------------------------------------------------------\n"),
@@ -896,8 +963,10 @@ def fit_Spline(mainDic,x,y,yerr,infilename,outfilename,biasDic,outliersline,outl
             distToLookUp=min(distToLookUp,max(x))
             i=min(bisect.bisect_left(splineX, distToLookUp),len(splineX)-1)
             prior_p=newSplineY[i]*(bias1*bias2) 
+            # prior_p=newSplineY[i]
             p_val=scsp.bdtrc(interxn.getCount()-1,observedIntraInRangeSum,prior_p)
             intraInRangeCount +=1
+            # print(interxn.getCount() - 1, observedIntraInRangeSum, prior_p)
         elif interactionType =='intraShort' and not interOnly:
             prior_p=1.0
             p_val=1.0
